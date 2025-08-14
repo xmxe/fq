@@ -22,133 +22,113 @@ class MyAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private var lastEventTime = 0L
-    private val DEBOUNCE_DELAY = 3000L // 防抖
+    private val DEBOUNCE_DELAY = 1000L // 减少延迟，更快响应
+    private val targetPackageName = "com.android.chrome"
+
     companion object {
+        @Volatile
         private var lastShownText: String? = null
+
+        @Volatile
         private var lastShowTime = 0L
-        private const val MIN_DISPLAY_INTERVAL = 2000L
+        private const val MIN_DISPLAY_INTERVAL = 1500L
     }
+
+    private val handler = Handler(Looper.getMainLooper())
+
+    // 防抖用的 Runnable
+    private val fetchAndShowTextRunnable = Runnable { fetchAndShowText() }
+    private val hideWindowRunnable = Runnable { FloatWindowManager.hideWindow() }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
+
         db = AppDatabase.getDatabase(this)
         dao = db.dataItemDao()
         Log.d("MyAccessibilityService", "无障碍服务已连接")
+
         serviceInfo = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                     AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                    AccessibilityEvent.TYPE_VIEW_SELECTED or
-                    AccessibilityEvent.TYPE_VIEW_CLICKED or
                     AccessibilityEvent.TYPE_VIEW_SCROLLED
 
-            // 可选：限制只监听某个 App（提高性能）
-            // packageName = arrayOf("com.example.myapp")
-
+            // 可监听所有 App，因为我们自己判断包名
+            packageNames = null // 监听所有，避免漏掉切换事件
             flags = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-
             notificationTimeout = 100
         }
     }
 
-    private fun extractCurrentPageText() {
-        Handler(Looper.getMainLooper()).postDelayed({
-            val rootNode = rootInActiveWindow ?: return@postDelayed
-            try {
-                val textSet = hashSetOf<String>()
-                collectTextFromNode(rootNode, textSet)
-                if (textSet.isNotEmpty()) {
-                    Log.d("CurrentPage", "✅ 当前页面文本: $textSet")
-                    FloatWindowManager.showWindow(this, textSet.toString())
-                }
-            } catch (e: Exception) {
-                Log.e("Accessibility", "提取文本失败", e)
-            } finally {
-                rootNode.recycle()
-            }
-        }, 100)
-    }
-
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val eventType = event?.eventType ?: return
-        when (eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_SELECTED,      // Tab 选中
-            AccessibilityEvent.TYPE_VIEW_CLICKED,       // 点击
-            AccessibilityEvent.TYPE_VIEW_SCROLLED       // 滑动
-                -> {
-                // 继续处理
-            }
-            else -> return
-        }
-        val currentTime = System.currentTimeMillis()
-        if (currentTime - lastEventTime < DEBOUNCE_DELAY) {
+        val packageName = event.packageName?.toString() ?: return
+
+        if (packageName == this.packageName) {
+            Log.d("MyAccessibilityService", "🟡 忽略自身事件: $eventType, 包名: $packageName")
             return
         }
+        Log.d("MyAccessibilityService", "✅ 外部事件: $eventType, 包名: $packageName")
+        // === 关键逻辑：根据包名控制悬浮窗显隐 ===
+        if (packageName != targetPackageName) {
+            // 不是 Chrome，延迟关闭（防抖）
+            handler.removeCallbacks(hideWindowRunnable)
+            handler.postDelayed(hideWindowRunnable, 300)
+            return
+        }
+
+        // 是 Chrome，清除关闭任务
+        handler.removeCallbacks(hideWindowRunnable)
+
+        // 防抖：避免频繁刷新
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastEventTime < DEBOUNCE_DELAY) return
         lastEventTime = currentTime
 
-        val className = event.className?.toString()
-        Log.d("当前界面", "切换到: $className")
-        Handler(Looper.getMainLooper()).postDelayed({
-            val rootNode = rootInActiveWindow ?: return@postDelayed
-
-            try {
-                val textSet = hashSetOf<String>()
-                collectTextFromNode(rootNode, textSet)
-
-                Log.d("MyAccessibilityService", "提取到文本: $textSet")
-                FloatWindowManager.showWindow(this@MyAccessibilityService, textSet.toString())
-                // 遍历所有文本，尝试搜索
-                // for (text in textSet) {
-                //     if (text.length < 2) continue
-                //
-                //     scope.launch {
-                //         // 可选：查询数据库
-                //         // val result = withContext(Dispatchers.IO) { dao.searchResult(text) }
-                //         // val displayText = result ?: text
-                //         if (text == lastShownText && currentTime - lastShowTime < MIN_DISPLAY_INTERVAL) {
-                //             return@launch
-                //         }
-                //         Log.d("MyAccessibilityService", "显示: $text")
-                //         FloatWindowManager.showWindow(this@MyAccessibilityService, text)
-                //
-                //         delay(2000)
-                //         if (FloatWindowManager.isShowing()) {
-                //             FloatWindowManager.hideWindow()
-                //         }
-                //
-                //         lastShownText = text
-                //         lastShowTime = currentTime
-                //
-                //         // if (!result.isNullOrEmpty()) {
-                //         //     Log.d("MyAccessibilityService", "匹配成功: '$text' -> '$result'")
-                //         //     FloatWindowManager.showWindow(this@MyAccessibilityService, text)
-                //         //     // 3秒后自动关闭
-                //         //     delay(3000)
-                //         //     FloatWindowManager.hideWindow()
-                //         //     // 匹配成功后退出（避免重复弹窗）
-                //         //     return@launch
-                //         // }
-                //     }
-                // }
-            } catch (e: Exception) {
-                Log.e("MyAccessibilityService", "处理事件时出错", e)
-            } finally {
-                // ✅ 必须回收 rootNode，避免内存泄漏
-                rootNode.recycle()
-            }
-        }, 100)
+        // 延迟刷新内容（避免事件风暴）
+        handler.removeCallbacks(fetchAndShowTextRunnable)
+        handler.postDelayed(fetchAndShowTextRunnable, 200)
     }
 
-    /**
-     * 递归收集节点中的文本和描述
-     */
-    private fun collectTextFromNode(node: AccessibilityNodeInfo, texts: HashSet<String>) {
-        // 添加文本
-        node.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts.add(it) }
-        // 添加描述（如图片描述）
-        node.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts.add(it) }
+    private fun fetchAndShowText() {
+        val rootNode = rootInActiveWindow ?: return
 
-        // 遍历子节点
+        // 再次确认是 Chrome
+        val windowPackageName = rootNode.packageName?.toString()
+        if (windowPackageName != targetPackageName) {
+            FloatWindowManager.hideWindow()
+            rootNode.recycle()
+            return
+        }
+
+        val textSet = hashSetOf<String>()
+        collectTextFromNode(rootNode, textSet)
+
+        if (textSet.isNotEmpty() && shouldShowText(textSet)) {
+            val content = textSet.joinToString("\n")
+            FloatWindowManager.showWindow(this, content)
+            Log.d("MyAccessibilityService", "✅ 悬浮窗已显示: $content")
+        }
+
+        rootNode.recycle()
+    }
+
+    private fun shouldShowText(texts: Set<String>): Boolean {
+        val currentTime = System.currentTimeMillis()
+        val combinedText = texts.joinToString(" ")
+
+        if (combinedText == lastShownText && currentTime - lastShowTime < MIN_DISPLAY_INTERVAL) {
+            return false
+        }
+        lastShownText = combinedText
+        lastShowTime = currentTime
+        return true
+    }
+
+    private fun collectTextFromNode(node: AccessibilityNodeInfo, texts: HashSet<String>) {
+        node.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts.add(it) }
+        node.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { texts.add(it) }
+
         for (i in 0 until node.childCount) {
             val child = node.getChild(i)
             if (child != null) {
@@ -157,7 +137,7 @@ class MyAccessibilityService : AccessibilityService() {
                 } catch (e: Exception) {
                     Log.e("MyAccessibilityService", "遍历子节点时出错: $i", e)
                 } finally {
-                    child.recycle() // 必须回收
+                    child.recycle()
                 }
             }
         }
@@ -165,17 +145,20 @@ class MyAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         Log.d("MyAccessibilityService", "服务被中断")
-        scope.cancel() // 取消所有协程
+        scope.cancel()
+        FloatWindowManager.hideWindow()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         scope.cancel()
+        handler.removeCallbacksAndMessages(null) // 清除所有任务
         FloatWindowManager.hideWindow()
         Log.d("MyAccessibilityService", "服务已销毁")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        handler.removeCallbacksAndMessages(null)
         FloatWindowManager.hideWindow()
         return super.onUnbind(intent)
     }

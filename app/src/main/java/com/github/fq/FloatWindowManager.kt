@@ -6,7 +6,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Build
+import android.provider.Settings
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -19,16 +21,11 @@ import android.widget.Toast
 object FloatWindowManager {
 
     private var windowManager: WindowManager? = null
-
     private var floatView: View? = null
-
     private var context: Context? = null
-
     private var isExpanded = false
     private var initialTouchX = 0f
     private var initialTouchY = 0f
-    private var lastX = 0f
-    private var lastY = 0f
 
     private const val PREF_NAME = "float_window_pref"
     private const val KEY_X = "float_window_x"
@@ -54,10 +51,13 @@ object FloatWindowManager {
      */
     @SuppressLint("ClickableViewAccessibility")
     fun showWindow(appContext: Context, text: String) {
-        if (floatView != null) {
-            hideWindow()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(appContext)) {
+            Toast.makeText(appContext, "需要“悬浮窗”权限，请在设置中开启", Toast.LENGTH_LONG).show()
+            return
         }
+        if (isShowing()) hideWindow()
 
+        // 使用 ApplicationContext，避免内存泄漏
         this.context = appContext.applicationContext
         val ctx = this.context ?: throw IllegalStateException("Context cannot be null")
 
@@ -70,7 +70,7 @@ object FloatWindowManager {
 
         val textView = floatView?.findViewById<TextView>(R.id.textView)
         val btnClose = floatView?.findViewById<Button>(R.id.btnClose)
-        val btnExpand = floatView?.findViewById<Button>(R.id.btnExpand)
+        // val btnExpand = floatView?.findViewById<Button>(R.id.btnExpand)
         val btnCopy = floatView?.findViewById<Button>(R.id.btnCopy)
 
         textView?.text = text
@@ -123,9 +123,8 @@ object FloatWindowManager {
                 }
 
                 MotionEvent.ACTION_UP -> {
-                    // 可选：添加自动吸附到边缘的功能
                     autoSnapToEdge(params, view)
-                    savePosition(params.x, params.y)  // ✅ 保存
+                    savePosition(params.x, params.y)
                     true
                 }
 
@@ -149,24 +148,22 @@ object FloatWindowManager {
             }
         }
 
-        btnExpand?.setOnClickListener {
-            isExpanded = !isExpanded
-            if (isExpanded) {
-                textView?.text = "【详细信息】\n$text\n这是展开后的内容。"
-                btnExpand.text = "收起"
-                params.height = WindowManager.LayoutParams.WRAP_CONTENT
-                windowManager?.updateViewLayout(floatView, params)
-            } else {
-                textView?.text = text
-                btnExpand.text = "展开"
-                params.height = WindowManager.LayoutParams.WRAP_CONTENT
-                windowManager?.updateViewLayout(floatView, params)
-            }
-        }
+        // btnExpand?.setOnClickListener {
+        //     isExpanded = !isExpanded
+        //     if (isExpanded) {
+        //         textView?.text = "【详细信息】\n$text\n这是展开后的内容。"
+        //         btnExpand.text = "收起"
+        //     } else {
+        //         textView?.text = text
+        //         btnExpand.text = "展开"
+        //     }
+        //     params.height = WindowManager.LayoutParams.WRAP_CONTENT
+        //     windowManager?.updateViewLayout(floatView, params)
+        // }
 
         try {
             windowManager?.addView(floatView, params)
-            Toast.makeText(ctx, "悬浮窗已显示", Toast.LENGTH_SHORT).show()
+            // Toast.makeText(ctx, "悬浮窗已显示", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(ctx, "无法显示悬浮窗，请检查权限", Toast.LENGTH_LONG).show()
             e.printStackTrace()
@@ -193,24 +190,29 @@ object FloatWindowManager {
      * 隐藏悬浮窗并清理引用
      */
     fun hideWindow() {
-        if (floatView != null && windowManager != null) {
-            try {
-                windowManager?.removeView(floatView)
-                Toast.makeText(context, "悬浮窗已关闭", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+        if (!isShowing()) {
+            return
         }
-        floatView = null
-        windowManager = null
-        context = null
-        isExpanded = false
+
+        try {
+            if (windowManager != null && floatView?.parent != null) {
+                windowManager?.removeView(floatView)
+                Log.d("FloatWindowManager", "✅ 悬浮窗已成功移除")
+            } else {
+                Log.d("FloatWindowManager", "⚠️ windowManager 为 null 或 view 已 detached")
+            }
+        } catch (e: Exception) {
+            Log.e("FloatWindowManager", "移除悬浮窗失败", e)
+        } finally {
+            floatView = null
+            windowManager = null
+            context = null
+            isExpanded = false
+        }
     }
 
     /**
      * 判断悬浮窗是否正在显示
      */
-    fun isShowing(): Boolean {
-        return floatView != null
-    }
+    fun isShowing(): Boolean = floatView != null
 }
