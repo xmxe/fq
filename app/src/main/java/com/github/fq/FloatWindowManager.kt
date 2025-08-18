@@ -64,10 +64,6 @@ object FloatWindowManager {
         val layoutInflater = ctx.getSystemService(Context.LAYOUT_INFLATER_SERVICE) as LayoutInflater
         floatView = layoutInflater.inflate(R.layout.float_window_layout, null)
 
-        // floatView?.post {
-        //     floatView?.requestLayout()
-        // }
-
         val textView = floatView?.findViewById<TextView>(R.id.textView)
         val btnClose = floatView?.findViewById<Button>(R.id.btnClose)
         // val btnExpand = floatView?.findViewById<Button>(R.id.btnExpand)
@@ -163,7 +159,6 @@ object FloatWindowManager {
 
         try {
             windowManager?.addView(floatView, params)
-            // Toast.makeText(ctx, "悬浮窗已显示", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(ctx, "无法显示悬浮窗，请检查权限", Toast.LENGTH_LONG).show()
             e.printStackTrace()
@@ -197,7 +192,7 @@ object FloatWindowManager {
         try {
             if (windowManager != null && floatView?.parent != null) {
                 windowManager?.removeView(floatView)
-                Log.d("FloatWindowManager", "✅ 悬浮窗已成功移除")
+                // Log.d("FloatWindowManager", "✅ 悬浮窗已成功移除")
             } else {
                 Log.d("FloatWindowManager", "⚠️ windowManager 为 null 或 view 已 detached")
             }

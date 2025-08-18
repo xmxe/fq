@@ -2,6 +2,7 @@ package com.github.fq
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -32,6 +33,15 @@ class MyAccessibilityService : AccessibilityService() {
         @Volatile
         private var lastShowTime = 0L
         private const val MIN_DISPLAY_INTERVAL = 1500L
+
+        fun isAccessibilityEnabled(context: Context): Boolean {
+            val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
+                ?: return false
+            val services = manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            return services.any { info ->
+                info.resolveInfo.serviceInfo.packageName == context.packageName
+            }
+        }
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -67,7 +77,7 @@ class MyAccessibilityService : AccessibilityService() {
             Log.d("MyAccessibilityService", "🟡 忽略自身事件: $eventType, 包名: $packageName")
             return
         }
-        Log.d("MyAccessibilityService", "✅ 外部事件: $eventType, 包名: $packageName")
+        // Log.d("MyAccessibilityService", "✅ 外部事件: $eventType, 包名: $packageName")
         // === 关键逻辑：根据包名控制悬浮窗显隐 ===
         if (packageName != targetPackageName) {
             // 不是 Chrome，延迟关闭（防抖）
@@ -103,14 +113,19 @@ class MyAccessibilityService : AccessibilityService() {
         val textSet = hashSetOf<String>()
         collectTextFromNode(rootNode, textSet)
 
-        if (textSet.isNotEmpty() && shouldShowText(textSet)) {
+        if (isFloatWindowEnabled() && textSet.isNotEmpty() && shouldShowText(textSet)) {
             val content = textSet.joinToString("\n")
             FloatWindowManager.showWindow(this, content)
-            Log.d("MyAccessibilityService", "✅ 悬浮窗已显示: $content")
+            // Log.d("MyAccessibilityService", "✅ 悬浮窗已显示: $content")
         }
 
         rootNode.recycle()
     }
+    private fun isFloatWindowEnabled(): Boolean {
+        val sp = getSharedPreferences("config", Context.MODE_PRIVATE)
+        return sp.getBoolean("enable_float_window", false) // 默认关闭
+    }
+
 
     private fun shouldShowText(texts: Set<String>): Boolean {
         val currentTime = System.currentTimeMillis()
@@ -144,7 +159,7 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        Log.d("MyAccessibilityService", "服务被中断")
+        // Log.d("MyAccessibilityService", "服务被中断")
         scope.cancel()
         FloatWindowManager.hideWindow()
     }
@@ -154,7 +169,7 @@ class MyAccessibilityService : AccessibilityService() {
         scope.cancel()
         handler.removeCallbacksAndMessages(null) // 清除所有任务
         FloatWindowManager.hideWindow()
-        Log.d("MyAccessibilityService", "服务已销毁")
+        // Log.d("MyAccessibilityService", "服务已销毁")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {

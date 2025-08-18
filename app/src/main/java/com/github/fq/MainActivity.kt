@@ -11,44 +11,13 @@ import android.widget.Button
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import com.github.fq.database.DatabaseInitializer
 
 class MainActivity : AppCompatActivity() {
 
-    // private var backgroundCheckRunnable: Runnable? = null
-    // private var handler = Handler(Looper.getMainLooper())
-
-    // app进入后台隐藏悬浮窗
-    // private val lifecycleCallback = object : Application.ActivityLifecycleCallbacks {
-    //     private var activityCount = 0
-    //
-    //     override fun onActivityStarted(activity: Activity) {
-    //         activityCount++
-    //         // 用户回到前台，取消后台任务
-    //         backgroundCheckRunnable?.let { handler.removeCallbacks(it) }
-    //         backgroundCheckRunnable = null
-    //     }
-    //
-    //     override fun onActivityStopped(activity: Activity) {
-    //         activityCount--
-    //         // 所有 Activity 都 stopped 了，可能是退后台或退出
-    //         if (activityCount == 0) {
-    //             backgroundCheckRunnable = Runnable {
-    //                 if (activityCount == 0) {
-    //                     FloatWindowManager.hideWindow()
-    //                 }
-    //             }
-    //             handler.postDelayed(backgroundCheckRunnable!!, 2000)
-    //         }
-    //     }
-    //
-    //     // 其他回调...
-    //     override fun onActivityPaused(activity: Activity) {}
-    //     override fun onActivityResumed(activity: Activity) {}
-    //     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
-    //     override fun onActivityDestroyed(activity: Activity) {}
-    //     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
-    // }
+    private lateinit var switchAccessibilityMonitor: SwitchCompat
+    private lateinit var btnCheckOverlay: Button
 
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -78,26 +47,35 @@ class MainActivity : AppCompatActivity() {
         DatabaseInitializer.initializeDatabase(this)
         setContentView(R.layout.activity_main)
 
-        // 自动检查权限并提示
-        // if (!hasUsageAccess()) {
-        //     Toast.makeText(this, "请先开启“使用情况访问权限”", Toast.LENGTH_LONG).show()
-        // }
-        // if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-        //     Toast.makeText(this, "请开启悬浮窗权限", Toast.LENGTH_LONG).show()
-        // }
+        switchAccessibilityMonitor = findViewById(R.id.switchAccessibilityMonitor)
+        btnCheckOverlay = findViewById(R.id.btnCheckOverlay)
 
-        // 设置点击按钮
-        findViewById<Button>(R.id.btnOpenAccessibility).setOnClickListener {
-            openAccessibilitySettings()
+        // 初始化 Switch 状态
+        val sp = getSharedPreferences("config", Context.MODE_PRIVATE)
+        switchAccessibilityMonitor.isChecked = sp.getBoolean("enable_float_window", false)
+
+        switchAccessibilityMonitor.setOnClickListener {
+            if (!MyAccessibilityService.isAccessibilityEnabled(this)) {
+                openAccessibilitySettings()
+                // 稍后会自动检查状态
+            }
         }
-        findViewById<Button>(R.id.btnCheckOverlay).setOnClickListener {
+        // 共享开关状态
+        switchAccessibilityMonitor.setOnCheckedChangeListener { _, isChecked ->
+            sp.edit().putBoolean("enable_float_window", isChecked).apply()
+            if (!isChecked) {
+                FloatWindowManager.hideWindow()
+            }
+        }
+
+        btnCheckOverlay.setOnClickListener {
             checkOverlayPermission()
         }
+
         // findViewById<Button>(R.id.btnGrantUsageAccess).setOnClickListener {
         //     openUsageAccessSettings()
         // }
 
-        // application.registerActivityLifecycleCallbacks(lifecycleCallback)
     }
 
     private fun openAccessibilitySettings() {
@@ -152,10 +130,35 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // 解注册，防止内存泄漏
-        // application.unregisterActivityLifecycleCallbacks(lifecycleCallback)
         if (isFinishing) {
             FloatWindowManager.hideWindow()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        syncSwitchWithAccessibilityState()
+    }
+
+    /**
+     * 开关与无障碍权限状态同步
+     */
+    private fun syncSwitchWithAccessibilityState() {
+        val isEnabled = MyAccessibilityService.isAccessibilityEnabled(this)
+        val sp = getSharedPreferences("config", Context.MODE_PRIVATE)
+        val floatWindowEnabled = sp.getBoolean("enable_float_window", false)
+
+        if (!isEnabled) {
+            if (switchAccessibilityMonitor.isChecked) {
+                switchAccessibilityMonitor.isChecked = false
+            }
+            if (floatWindowEnabled) {
+                sp.edit().putBoolean("enable_float_window", false).apply()
+            }
+            FloatWindowManager.hideWindow()
+            Toast.makeText(this, "无障碍服务已关闭，功能已停用", Toast.LENGTH_SHORT).show()
+        } else {
+            switchAccessibilityMonitor.isChecked = floatWindowEnabled
         }
     }
 }
